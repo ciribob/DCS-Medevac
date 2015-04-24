@@ -4,7 +4,7 @@
 medevac = {}
 
 -- SETTINGS FOR MISSION DESIGNER vvvvvvvvvvvvvvvvvv
-medevac.medevacunits = {"MEDEVAC #1", "MEDEVAC #2","MEDEVAC #3","MEDEVAC #4","MEDEVAC #5"} -- List of all the MEDEVAC _UNIT NAMES_ (the line where it says "Pilot" in the ME)!
+medevac.medevacunits = {"MEDEVAC #1", "MEDEVAC #2","MEDEVAC #3","MEDEVAC #4","MEDEVAC #5","MEDEVAC RED #1"} -- List of all the MEDEVAC _UNIT NAMES_ (the line where it says "Pilot" in the ME)!
 medevac.bluemash = {"BlueMASH #1", "BlueMASH #2"} -- The unit that serves as MASH for the blue side
 medevac.redmash = {"RedMASH #1", "RedMASH #2"} -- The unit that serves as MASH for the red side
 medevac.bluesmokecolor = 4 -- Color of smokemarker for blue side, 0 is green, 1 is red, 2 is white, 3 is orange and 4 is blue
@@ -27,6 +27,10 @@ medevac.minbleedtime = 60 -- Minimum bleed time that's possible to get
 medevac.minlandtime = 60 -- Minimum time * medevac.pilotperformance < medevac.minlandtime --> Pad to at least this much time allocated for landing
 medevac.pilotperformance = 0.15 -- Multiplier on how much of the given time pilot is expected to have left when reaching the MASH (On average)
 medevac.messageTime = 120 -- Time to show the intial wounded message for in seconds
+
+medevac.movingMessage = "Be there in a jiffy!"
+medevac.loadDistance = 25 -- configure distance for troops to get in helicopter in meters
+
 -- SETTINGS FOR MISSION DESIGNER ^^^^^^^^^^^^^^^^^^^*
 
 -- Changelog v 6
@@ -76,7 +80,7 @@ for nr,x in pairs(medevac.redmash) do
     assert(Unit.getByName(x) ~= nil, string.format("\n\n** HEY MISSION-DESIGNER!**\n\nThe red MASH '%s' doesn't exist!\n\nMake sure medevac.redmash contains the\nnames of live units.\n", x))
     assert((Group.getCoalition(Unit.getGroup(Unit.getByName(x))) == 1), string.format("\n\n** HEY MISSION-DESIGNER!**\n\nmedevac.redmash has to be units on RED coalition only!\nUnit '%s' is not on correct side.", x))
 end
-assert(mist ~= nil, "\n\n** HEY MISSION-DESIGNER! **\n\nMiST has not been loaded!\n\nMake sure MiST 2.0 is running\n*before* running this script!\n")
+assert(mist ~= nil, "\n\n** HEY MISSION-DESIGNER! **\n\nMiST has not been loaded!\n\nMake sure MiST 3.6 or higher is running\n*before* running this script!\n")
 
 medevac.addedTo = {}
 medevac.deadUnits = {}
@@ -94,15 +98,7 @@ medevac.woundedMovingMessage = {} -- tracks if the wounded moving message has be
 
 medevac.heliCloseMessage = {} -- tracks heli close message  ie heli < 500m distance
 
---function medevac.tableContains(Tbl,trgt)
---    local _contains = false
---    for _,x in pairs(Tbl) do
---        if (x==trgt) then
---            _contains=true
---        end
---    end
---    return _contains
---end
+medevac.sarEjected = {} -- tracks if the pilot has ejected. Units can still get into the helicopter with no pilot if this inst checked
 
 -- Handles all world events
 medevac.eventHandler = {}
@@ -118,7 +114,7 @@ function medevac.eventHandler:onEvent(_event)
                 -- if its a sar heli, re-add check status script
                 for _,_heliName in pairs(medevac.medevacunits) do
 
-                    if _heliName == _event.initiator:getName() then 
+                    if _heliName == _event.initiator:getName() then
                         -- add back the status script
                         for _woundedName,_groupInfo in pairs(medevac.woundedGroups) do
 
@@ -127,7 +123,7 @@ function medevac.eventHandler:onEvent(_event)
                                 --env.info(string.format("Schedule Respawn %s %s",_heliName,_woundedName))
                                 -- queue up script
                                 -- Schedule timer to check when to pop smoke
-                                timer.scheduleFunction(medevac.checkStatus, {_heliName,_woundedName}, timer.getTime() + 5)
+                                timer.scheduleFunction(medevac.checkWoundedGroupStatus, {_heliName,_woundedName}, timer.getTime() + 5)
                             end
                         end
                     end
@@ -147,10 +143,10 @@ function medevac.eventHandler:onEvent(_event)
 
                 env.info("Event unit - Pilot Ejected or Unit Dead")
                 -- Check if event has been fired more than once
---                if (medevac.tableContains(medevac.deadUnits, _event.initiator)) then
---                    env.warning("Event already fired for this unit. Not Handling!.", false)
---                    return false
---                end
+                --                if (medevac.tableContains(medevac.deadUnits, _event.initiator)) then
+                --                    env.warning("Event already fired for this unit. Not Handling!.", false)
+                --                    return false
+                --                end
 
                 local _isPilot = false
 
@@ -248,7 +244,7 @@ function medevac.spawnGroup(_deadUnit, _isPilot)
 
     local _id =  mist.getNextGroupId()
 
-    local _groupName = "Wounded Group #".._id
+    local _groupName = "Wounded ".._deadUnit:getTypeName().." Crew #".._id
 
     if _isPilot then
         _groupName = "Downed Pilot #".._id
@@ -360,7 +356,7 @@ function medevac.spawnGroup(_deadUnit, _isPilot)
                 end
 
             end
-            _group.units[_i] = medevac.createUnit(_pos.x + _xOffset, _pos.z + _yOffset, _angle, _unitType)
+            _group.units[_i] = medevac.createUnit(_pos.x + _xOffset, _pos.z + _yOffset, _angle, _unitType,_isPilot)
         end
 
     end
@@ -370,14 +366,23 @@ function medevac.spawnGroup(_deadUnit, _isPilot)
 end
 
 
-function medevac.createUnit(_x,_y,_heading, _type)
+function medevac.createUnit(_x,_y,_heading, _type,_isPilot)
 
     local _id  =  mist.getNextUnitId();
+
+    local _name
+
+    if _isPilot then
+        _name = string.format("Wounded Pilot #%s", _id)
+    else
+        _name  = string.format("Wounded crew #%s", _id)
+    end
+
     local _newUnit = {
 
         ["y"] = _y,
         ["type"] = _type,
-        ["name"] = string.format("Wounded unit #%s", _id),
+        ["name"] = _name,
         ["unitId"] = _id,
         ["heading"] = _heading,
         ["playerCanDrive"] = true,
@@ -403,7 +408,6 @@ function medevac.initSARForGroup(_downedGroup, _pilot)
         _text = string.format("%s requests medevac at %s", _downedGroup:getName(), _coordinatesText)
     end
 
-
     -- Loop through all the medevac units
     for x,_heliName in pairs(medevac.medevacunits) do
         local _status, _err = pcall(
@@ -428,7 +432,7 @@ function medevac.initSARForGroup(_downedGroup, _pilot)
                         timer.scheduleFunction(medevac.delayedHelpMessage, {_unitName, _medevacText, _groupName}, timer.getTime() + medevac.requestdelay)
 
                         -- Schedule timer to check when to pop smoke
-                        timer.scheduleFunction(medevac.checkStatus, {_unitName,_groupName}, timer.getTime() + 1)
+                        timer.scheduleFunction(medevac.checkWoundedGroupStatus, {_unitName,_groupName}, timer.getTime() + 1)
                     end
                 else
                     --env.warning(string.format("Medevac unit %s not active", _heliName), false)
@@ -448,23 +452,25 @@ function medevac.initSARForGroup(_downedGroup, _pilot)
 
 end
 
---this function does pretty much everything... sorry, needs to be laid out better
-function medevac.checkStatus(_arguments)
+function medevac.checkWoundedGroupStatus(_argument)
 
     local _status, _err = pcall(
-        function (_argument)
-
-            local _heliName = _argument[1]
-            local _woundedGroupName = _argument[2]
+        function (_args)
+            local _heliName = _args[1]
+            local _woundedGroupName = _args[2]
 
             local _woundedGroup = medevac.getWoundedGroup(_woundedGroupName)
             local _heliUnit = medevac.getSARHeli(_heliName)
 
+            -- if wounded group is not here then message alread been sent to SARs
+            -- stop processing any further
+            if medevac.woundedGroups[_woundedGroupName] == nil then
+                return
+            end
+
             if _heliUnit == nil then
                 --env.info(string.format("Helicopter is dead."))
-
                 -- stop wounded moving, head back to smoke as target heli is DEAD
-
                 if #_woundedGroup > 0 then
                     if medevac.woundedMoving[_woundedGroupName] ~= nil and  medevac.woundedMoving[_woundedGroupName].heli == _heliName then
 
@@ -476,221 +482,314 @@ function medevac.checkStatus(_arguments)
 
                 -- in transit cleanup
                 medevac.inTransitGroups[_heliName] = nil
-
-                -- reschedule for when heli is alive, try again in some time
-              --  timer.scheduleFunction(medevac.checkStatus, _argument, timer.getTime() + 5)
-
-
-
                 return
             end
-
 
             -- double check that this function hasnt been queued for the wrong side
-            if #_woundedGroup > 0 then
 
-                if _woundedGroup[1]:getCoalition() ~= _heliUnit:getCoalition() then
-                    return
-                end
-
-            end
-
-            -- if wounded group is not here then message alread been sent to SARs
-            -- stop processing
-            if medevac.woundedGroups[_woundedGroupName] == nil then
-                return
-            end
-
-            --wrong side
             if  medevac.woundedGroups[_woundedGroupName].side ~= _heliUnit:getCoalition() then
-                return
+                return --wrong side!
             end
 
+            if medevac.checkGroupNotKIA(_woundedGroup,_woundedGroupName,  _heliUnit,_heliName) then
 
-            -- check if unit has died or been picked up
-            if #_woundedGroup == 0 and _heliUnit ~=nil then
+                local _woundedLeader =  _woundedGroup[1]
+                local _lookupKeyHeli = _heliUnit:getID().."_".._woundedLeader:getID() --lookup key for message state tracking
 
-                local inTransit = false
+                local _distance = medevac.getDistance(_heliUnit:getPoint(), _woundedLeader:getPoint())
 
-               for _currentHeli,_groups in pairs(medevac.inTransitGroups) do
+                if _distance < 3000 then
 
-                   if _groups.woundedGroup == _woundedGroupName then
-
-                       if _groups.side == _heliUnit:getCoalition() then
-                           inTransit = true
-
-                           medevac.displayToAllSAR( string.format("%s has been picked up by %s", _woundedGroupName,_currentHeli ), _heliUnit:getCoalition(),_heliName)
-
-                           break
-                       end
-                   end
-               end
-
-
-                --display to all sar
-
-                if inTransit == false then
-                    --DEAD
-
-                    medevac.displayToAllSAR( string.format("%s is KIA ", _woundedGroupName ), _heliUnit:getCoalition(),_heliName)
-
-                end
-
-                --     medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s is dead", _heliName,_woundedGroupName ),10)
-
-                --stops the message being displayed again
-                medevac.woundedGroups[_woundedGroupName] = nil
-                medevac.woundedMoving[_woundedGroupName] = nil
-
-                return
-            end
-
-            local _woundedLeader = _woundedGroup[1]
-
-            local _distance = medevac.getDistance(_heliUnit:getPoint(), _woundedLeader:getPoint())
-
-            local _lookupKeyHeli = _heliUnit:getID().."_".._woundedLeader:getID() --lookup key for message state tracking
-
-            if (_distance < 3000) then
-                -- Helicopter is within 3km
-
-                -- have we popped smoke already in the last 5 mins
-                local _lastSmoke =  medevac.smokeMarkers[_woundedGroupName]
-                if _lastSmoke == nil or timer.getTime() > _lastSmoke then
-
-                    local _smokecolor
-                    if (_woundedLeader:getCoalition() == 2) then
-                        _smokecolor = medevac.bluesmokecolor
-                    else
-                        _smokecolor =  medevac.redsmokecolor
-                    end
-                    trigger.action.smoke(_woundedLeader:getPoint(), _smokecolor)
-
-                    medevac.smokeMarkers[_woundedGroupName] = timer.getTime() +300 -- next smoke time
-                end
-
-
-                if medevac.heliVisibleMessage[_lookupKeyHeli] == nil then
-
-                    medevac.displayMessageToSAR(_heliUnit,string.format("%s: We see you! Land by the smoke.", _heliName),30)
-
-                    --mark as shown for THIS heli and THIS group
-                    medevac.heliVisibleMessage[_lookupKeyHeli] = true
-
-                end
-
-                if (_distance < 500) then
-
-                    if medevac.heliCloseMessage[_lookupKeyHeli] == nil then
-
-                        medevac.displayMessageToSAR(_heliUnit,string.format("%s: You're close now! Land within 500m of the smoke are we'll move to you.", _heliName),10)
-
-                        --mark as shown for THIS heli and THIS group
-                        medevac.heliCloseMessage[_lookupKeyHeli] = true
-
-                    end
-
-                    -- have we landed close enough?
-                    if  _heliUnit:inAir() == false then
-
-                        --on the move?
-                        if medevac.woundedMoving[_woundedGroupName] == nil then
-
-                            -- moving to you!
-                            medevac.orderGroupToMoveToPoint(_woundedLeader,_heliUnit:getPoint())
-
-                            --store point so we can send them back to the smoke
-                            medevac.woundedMoving[_woundedGroupName] = {point = _woundedLeader:getPoint(), heli = _heliName}
-
-                        end
-
-                        --check they're not already moving to a different helicopter
-                        if medevac.woundedMoving[_woundedGroupName].heli == _heliName then
-
-                            --possible issue if another heli lands nearby? they are alread heading to a differnt one
-                            medevac.displayMessageToSAR(_heliUnit, string.format("%s: We are %u meters and moving to you! Be there in a jiffy!", _heliName, _distance ),1)
-                        else
-                            medevac.displayMessageToSAR(_heliUnit, string.format("%s: We are heading to %s, go and pick up another group!", _heliName,medevac.woundedMoving[_woundedGroupName].heli ),10)
-                        end
-
-                        -- if you land on them, doesnt matter if they were heading to someone else as you're closer, you win! :)
-                        if(_distance < 50)  then
-                            -- GET IN!
-
-                            if( medevac.inTransitGroups[_heliUnit:getName()] )~=nil then
-
-                                --units are in the helicopter
-                                --its full
-                                return
-                            end
-
-
-                            --remove from wounded groups to stop message about death
-                            medevac.inTransitGroups[_heliUnit:getName()] = {originalGroup =medevac.woundedGroups[_woundedGroupName].originalGroup, woundedGroup =_woundedGroupName, side = _heliUnit:getCoalition()}
-
-                            medevac.woundedGroups[_woundedGroupName] = nil
-
-                            Group.destroy(_woundedLeader:getGroup())
-
-                            local _bleedTime = medevac.getBleedTime(_heliUnit)
-
-                            --NO MASH
-                            if _bleedTime == -1 then
-                                medevac.displayMessageToSAR(_heliUnit, string.format("%s: NO MASH! The casulties died of despair!", _heliName ),10)
-                                return
-                            end
-
-                            -- will have bled out after  timer.getTime() >_bleedTime + timer.getTime()
-
-                            medevac.displayMessageToSAR(_heliUnit, string.format("%s: We're in! Get to the MASH ASAP! You've got %s seconds tops!", _heliName,_bleedTime ),10)
-
-                            timer.scheduleFunction(medevac.scheduledSARFlight, {_heliUnit:getName(), _bleedTime + timer.getTime()}, timer.getTime() + 5)
-
-                        end
-
-                    else
-
-                        -- stop moving, head back to smoke if the target heli leaves
-                        if medevac.woundedMoving[_woundedGroupName] ~= nil and  medevac.woundedMoving[_woundedGroupName].heli == _heliName then
-
-                            medevac.displayMessageToSAR(_heliUnit, string.format("%s: Heading back to the smoke. Where are you going?!", _heliName ),10)
-
-                            medevac.orderGroupToMoveToPoint(_woundedLeader,medevac.woundedMoving[_woundedGroupName].point)
-
-                            medevac.woundedMoving[_woundedGroupName] = nil
-                        end
-
-                    end
+                    if medevac.checkCloseWoundedGroup(_distance, _heliUnit,_heliName,_woundedGroup,_woundedGroupName) == true then
+                         -- we're close, reschedule
+                         timer.scheduleFunction(medevac.checkWoundedGroupStatus, _args, timer.getTime() + 1)
+                     end
 
                 else
+                    medevac.heliVisibleMessage[_lookupKeyHeli] = nil
 
-                    -- display one more message when you leave
-                    if medevac.heliCloseMessage[_lookupKeyHeli] == true then
-
-                        medevac.displayMessageToSAR(_heliUnit,string.format("%s: We are %u meters from you! Why are you leaving us? Come back!", _heliName, _distance ),10)
-                    end
-
-                    medevac.heliCloseMessage[_lookupKeyHeli] = nil
+                    --reschedule as units arent dead yet , schedule for a bit slower though as we're far away
+                    timer.scheduleFunction(medevac.checkWoundedGroupStatus, _args, timer.getTime() + 5)
                 end
 
+            end
+    end
+            ,_argument)
 
-                --reschedule as units arent dead and we're close
-                timer.scheduleFunction(medevac.checkStatus, _argument, timer.getTime() + 1)
+    if not _status then
 
+        env.error(string.format("error checkWoundedGroupStatus %s",_err))
+    end
+
+end
+
+function medevac.popSmokeForGroup(_woundedGroupName, _woundedLeader)
+    -- have we popped smoke already in the last 5 mins
+    local _lastSmoke =  medevac.smokeMarkers[_woundedGroupName]
+    if _lastSmoke == nil or timer.getTime() > _lastSmoke then
+
+        local _smokecolor
+        if (_woundedLeader:getCoalition() == 2) then
+            _smokecolor = medevac.bluesmokecolor
+        else
+            _smokecolor =  medevac.redsmokecolor
+        end
+        trigger.action.smoke(_woundedLeader:getPoint(), _smokecolor)
+
+        medevac.smokeMarkers[_woundedGroupName] = timer.getTime() +300 -- next smoke time
+    end
+end
+
+
+-- Helicopter is within 3km
+function medevac.checkCloseWoundedGroup(_distance, _heliUnit,_heliName,_woundedGroup,_woundedGroupName)
+
+    local _woundedLeader =  _woundedGroup[1]
+    local _lookupKeyHeli = _heliUnit:getID().."_".._woundedLeader:getID() --lookup key for message state tracking
+
+    local _woundedCount = # _woundedGroup
+
+    medevac.popSmokeForGroup(_woundedGroupName,_woundedLeader)
+
+    if medevac.heliVisibleMessage[_lookupKeyHeli] == nil then
+
+        if _woundedCount > 1 then
+            medevac.displayMessageToSAR(_heliUnit,string.format("%s: %s. We hear you! Damn that thing is loud! Land by the smoke.", _heliName,_woundedGroupName),30)
+        else
+            medevac.displayMessageToSAR(_heliUnit,string.format("%s: %s. I hear you! Damn that thing is loud! Land by the smoke.", _heliName,_woundedLeader:getName()),30)
+        end
+        --mark as shown for THIS heli and THIS group
+        medevac.heliVisibleMessage[_lookupKeyHeli] = true
+    end
+
+    if (_distance < 500) then
+
+        if medevac.heliCloseMessage[_lookupKeyHeli] == nil then
+
+            if _woundedCount > 1 then
+                medevac.displayMessageToSAR(_heliUnit,string.format("%s: %s. You're close now! Land within 500m of the smoke and we'll move to you.", _heliName,_woundedGroupName),10)
             else
-                medevac.heliVisibleMessage[_lookupKeyHeli] = nil
+                medevac.displayMessageToSAR(_heliUnit,string.format("%s: %s. You're close now! Land within 500m of the smoke and I'll move to you.", _heliName,_woundedLeader:getName()),10)
 
-                --reschedule as units arent dead yet , schedule for a bit slower though as we're far away
-                timer.scheduleFunction(medevac.checkStatus, _argument, timer.getTime() + 5)
+            end
+
+            --mark as shown for THIS heli and THIS group
+            medevac.heliCloseMessage[_lookupKeyHeli] = true
+
+        end
+
+        -- have we landed close enough?
+        if  _heliUnit:inAir() == false then
+
+            medevac.woundedShouldMoveToHeli(_woundedGroupName,_woundedGroup,_heliName,_heliUnit,_distance)
+
+            -- if you land on them, doesnt matter if they were heading to someone else as you're closer, you win! :)
+            if(_distance < medevac.loadDistance)  then
+                -- GET IN!
+
+                if medevac.inTransitGroups[_heliUnit:getName()] ~=nil then
+
+
+                    medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s. There's no room! Take the wounded that are on board!", _heliName,_woundedGroupName ),10)
+
+                    --units are in the helicopter
+                    --its full
+
+                    return true
+                end
+
+                medevac.woundedMoving[_woundedGroupName] = nil
+
+
+                --remove from wounded groups to stop message about death
+                medevac.inTransitGroups[_heliUnit:getName()] = {originalGroup = medevac.woundedGroups[_woundedGroupName].originalGroup, woundedGroup =_woundedGroupName, side = _heliUnit:getCoalition()}
+
+                medevac.woundedGroups[_woundedGroupName] = nil
+
+                Group.destroy(_woundedLeader:getGroup())
+
+                local _bleedTime = medevac.getBleedTime(_heliUnit)
+
+                --NO MASH
+                if _bleedTime == -1 then
+                    medevac.displayMessageToSAR(_heliUnit, string.format("%s: NO MASH! The casulties died of despair!", _heliName ),10)
+                    return false
+                end
+
+                -- will have bled out after  timer.getTime() >_bleedTime + timer.getTime()
+                if _woundedCount > 1 then
+                    medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s. We're in! Get to the MASH ASAP! You've got %s seconds tops!", _heliName,_woundedGroupName,_bleedTime ),10)
+                else
+                    medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s I'm in! Get to the MASH ASAP! You've got %s seconds tops!", _heliName,_woundedLeader:getName(),_bleedTime ),10)
+                end
+
+                timer.scheduleFunction(medevac.scheduledSARFlight, {_heliUnit:getName(), _bleedTime + timer.getTime()}, timer.getTime() + 5)
+
+                return false
+
+            end
+
+        else
+
+            -- stop moving, head back to smoke if the target heli leaves
+            if medevac.woundedMoving[_woundedGroupName] ~= nil and  medevac.woundedMoving[_woundedGroupName].heli == _heliName then
+
+                medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s. Heading back to the smoke. Where are you going?!", _heliName,_woundedGroupName ),10)
+
+                medevac.orderGroupToMoveToPoint(_woundedLeader,medevac.woundedMoving[_woundedGroupName].point)
+
+                medevac.woundedMoving[_woundedGroupName] = nil
             end
 
         end
-        ,_arguments)
-    if (not _status) then
-        env.error(string.format("Error while SmokeEvent\n\n%s",_err))
+
     end
 
-    return
+    return true
+
+end
+
+
+
+function medevac.checkGroupNotKIA(_woundedGroup,_woundedGroupName,  _heliUnit,_heliName)
+
+    -- check if unit has died or been picked up
+    if #_woundedGroup == 0 and _heliUnit ~=nil then
+
+        local inTransit = false
+
+        for _currentHeli,_groups in pairs(medevac.inTransitGroups) do
+
+            if _groups.woundedGroup == _woundedGroupName then
+
+                if _groups.side == _heliUnit:getCoalition() then
+                    inTransit = true
+
+                    medevac.displayToAllSAR( string.format("%s has been picked up by %s", _woundedGroupName,_currentHeli ), _heliUnit:getCoalition(),_heliName)
+
+                    break
+                end
+            end
+        end
+
+
+        --display to all sar
+        if inTransit == false then
+            --DEAD
+
+            medevac.displayToAllSAR( string.format("%s is KIA ", _woundedGroupName ), _heliUnit:getCoalition(),_heliName)
+
+        end
+
+        --     medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s is dead", _heliName,_woundedGroupName ),10)
+
+        --stops the message being displayed again
+        medevac.woundedGroups[_woundedGroupName] = nil
+        medevac.woundedMoving[_woundedGroupName] = nil
+
+        return false
+    end
+
+    --continue
+    return true
+
+end
+
+-- get the closest wounded group to the helicopter
+function medevac.getClosetGroupName( _heli)
+
+        local _side = _heli:getCoalition()
+
+        local _closetGroup = nil
+        local _shortestDistance = -1
+        local _distance = 0
+
+        for _woundedName,_groupInfo in pairs(medevac.woundedGroups) do
+
+            if _groupInfo.side == _side then
+
+                local _tempWounded = medevac.getWoundedGroup(_woundedName)
+
+                -- check group exists and not moving to someone else
+                if #_tempWounded > 0 and medevac.woundedMoving[_woundedName] == nil then
+                    _distance = medevac.getDistance(_heli:getPoint(), _tempWounded[1]:getPoint())
+
+
+
+                    if _distance ~= nil and (_shortestDistance == -1 or _distance < _shortestDistance) then
+
+                        _shortestDistance = _distance
+                        _closetGroup = _woundedName
+                    end
+                end
+            end
+        end
+
+        return _closetGroup
+
+end
+
+-- check if a wounded group should move to the current heli
+-- if the current group is NOT the closet to the current Heli then
+-- they shouldn't move as a closer group will
+function medevac.woundedShouldMoveToHeli(_woundedGroupName,_woundedGroup,_heliName,_heliUnit,_distance)
+
+    local _woundedLeader = _woundedGroup[1]
+
+    -- make sure no other groups are moving to helicopter
+	for _movingName, _details in pairs(medevac.woundedMoving) do
+    	
+    	if _details.heli == _heliName and _movingName ~= _woundedGroupName then
+    		
+    		medevac.orderGroupToMoveToPoint(_woundedLeader,_details.point)
+    		medevac.woundedMoving[_movingName] = nil
+    	end
+
+    end
+
+
+    if medevac.inTransitGroups[_heliUnit:getName()] ~= nil then
+
+        -- dont move to this heli if its full!
+        return
+    end
+
+
+    --on the move?
+    if medevac.woundedMoving[_woundedGroupName] == nil then
+
+       local _closetGroup = medevac.getClosetGroupName( _heliUnit)
+
+       if  _closetGroup == nil or _woundedGroupName == _closetGroup then
+
+            -- moving to you!
+            medevac.orderGroupToMoveToPoint(_woundedLeader,_heliUnit:getPoint())
+
+            --store point so we can send them back to the smoke
+            medevac.woundedMoving[_woundedGroupName] = {point = _woundedLeader:getPoint(), heli = _heliName}
+
+       else
+            --- a different group will move to you later on in the scheduled tasks that is closer
+
+          --  if _closetGroup ~= nil then
+               -- env.info("Group Not the closet".._woundedGroupName.." this one was ".._closetGroup)
+          --  end
+
+       end
+
+    end
+
+    --check they're not already moving to a different helicopter
+    if medevac.woundedMoving[_woundedGroupName] ~=nil and medevac.woundedMoving[_woundedGroupName].heli == _heliName then
+
+        --possible issue if another heli lands nearby? they are alread heading to a differnt one
+        medevac.displayMessageToSAR(_heliUnit, string.format("%s: We are %u meters and moving to you! %s", _heliName, _distance, medevac.movingMessage ),1)
+    else
+
+        if medevac.woundedMoving[_woundedGroupName] ~=nil then
+            medevac.displayMessageToSAR(_heliUnit, string.format("%s: We are heading to %s, go and pick up another group!", _heliName,medevac.woundedMoving[_woundedGroupName].heli ),10)
+        end
+    end
 
 end
 
@@ -720,7 +819,7 @@ function medevac.getBleedTime(_heli)
 
     -- DS: Set random time between _minbleedtime and _maxbleedtime
 
-   return math.random(_minBleedTime, _maxBleedTime)
+    return math.random(_minBleedTime, _maxBleedTime)
 end
 
 function medevac.getMinBleedTime(_distance, _metersPerSecond, _minBleedTime)
@@ -1022,19 +1121,19 @@ function medevac.getPositionOfWounded(_woundedGroup)
 
     local _coordinatesText = ""
     if medevac.coordtype == 0 then -- Lat/Long DMTM
-        _coordinatesText = string.format("%s", mist.getLLString({units = _woundedTable, acc = 3, DMS = 0}))
+    _coordinatesText = string.format("%s", mist.getLLString({units = _woundedTable, acc = 3, DMS = 0}))
 
     elseif medevac.coordtype == 1 then -- Lat/Long DMS
-        _coordinatesText = string.format("%s", mist.getLLString({units = _woundedTable, acc = 3, DMS = 1}))
+    _coordinatesText = string.format("%s", mist.getLLString({units = _woundedTable, acc = 3, DMS = 1}))
 
     elseif medevac.coordtype == 2 then -- MGRS
-        _coordinatesText = string.format("%s", mist.getMGRSString({units = _woundedTable, acc = 3}))
+    _coordinatesText = string.format("%s", mist.getMGRSString({units = _woundedTable, acc = 3}))
 
     elseif medevac.coordtype == 3 then -- Bullseye Imperial
-        _coordinatesText = string.format("bullseye %s", mist.getBRString({units = _woundedTable, ref = coalition.getMainRefPoint(_woundedGroup:getCoalition()), alt = 0}))
+    _coordinatesText = string.format("bullseye %s", mist.getBRString({units = _woundedTable, ref = coalition.getMainRefPoint(_woundedGroup:getCoalition()), alt = 0}))
 
     else   -- Bullseye Metric --(medevac.coordtype == 4)
-        _coordinatesText = string.format("bullseye %s", mist.getBRString({units = _woundedTable, ref = coalition.getMainRefPoint(_woundedGroup:getCoalition()), alt = 0, metric = 1}))
+    _coordinatesText = string.format("bullseye %s", mist.getBRString({units = _woundedTable, ref = coalition.getMainRefPoint(_woundedGroup:getCoalition()), alt = 0, metric = 1}))
     end
 
     return _coordinatesText
@@ -1096,7 +1195,7 @@ function addMedevacMenuItem()
 
     timer.scheduleFunction(addMedevacMenuItem, nil, timer.getTime() + 5)
 
-  --  env.info("addMenuItem")
+    --  env.info("addMenuItem")
 
     for _,_unitName in pairs(medevac.medevacunits) do
 
@@ -1113,12 +1212,12 @@ function addMedevacMenuItem()
                     medevac.displayActiveSAR,
                     _unitName)
 
-             --   env.info(string.format("Medevac event handler added %s",_unitName))
+                --   env.info(string.format("Medevac event handler added %s",_unitName))
 
                 medevac.addedTo[_unitName] = true
             end
         else
-           -- env.info(string.format("unit nil %s",_unitName))
+            -- env.info(string.format("unit nil %s",_unitName))
         end
     end
 
