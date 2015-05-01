@@ -195,7 +195,7 @@ function medevac.eventHandler:onEvent(_event)
                     trigger.action.outTextForCoalition(_unit:getCoalition(), "MAYDAY MAYDAY! " .. _unit:getTypeName() .. " shot down. Chute Spotted!", 10)
                 end
 
-                -- SAR wont receive message above
+              
                 medevac.initSARForGroup(_spawnedGroup, _isPilot)
             end
 
@@ -847,13 +847,14 @@ function medevac.scheduledSARFlight(_args)
 
             medevac.inTransitGroups[_heliUnit:getName()] = nil
 
-            if (medevac.clonenewgroups) then
+            if medevac.clonenewgroups and _originalGroup ~= "" then
 
-                local _txt = string.format("%s: The wounded have been taken to the\nmedical clinic. Good job!\n\nReinforcment have arrived.", _heliUnit:getName())
+                local _txt = string.format("%s: The wounded have been taken to the\nmedical clinic. Good job!\n\nReinforcments have arrived.", _heliUnit:getName())
 
                 medevac.displayMessageToSAR(_heliUnit, _txt, 10)
 
                 mist.cloneGroup(_originalGroup, true)
+                
             else
 
                 local _txt = string.format("%s: The wounded have been taken to the\nmedical clinic. Good job!", _heliUnit:getName())
@@ -1047,6 +1048,27 @@ function medevac.getWoundedGroup(_groupName)
     end
 end
 
+-- allows manually added wounded troops or downed pilots
+-- Make sure that if you set _isPilot to true, the group only has one soldier in it
+function medevac.injectWoundedGroup(_groupName,_isPilot)
+
+    local _spawnedGroup = Group.getByName(_groupName)
+
+    if _spawnedGroup ~= nil and _spawnedGroup:isActive() then
+
+        medevac.addSpecialParametersToGroup(_spawnedGroup)
+
+        --Set original group to empty string so mist doesnt respawn them if that option is enabled
+        medevac.woundedGroups[_spawnedGroup:getName()] = { originalGroup = "", side = _spawnedGroup:getCoalition() }
+
+        medevac.initSARForGroup(_spawnedGroup, _isPilot)
+
+    else
+
+        trigger.action.outText( "MISSION ERROR - Could not find wounded group ".._groupName.." to add to wounded", 5 )
+    end
+
+end
 
 
 function medevac.convertGroupToTable(_group)
