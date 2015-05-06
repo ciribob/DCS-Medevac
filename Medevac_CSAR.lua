@@ -924,16 +924,16 @@ function medevac.scheduledSARFlight(_args)
 
         local _txt
 
-        // if medevac.showbleedtimer == true then
-        //     _txt = string.format("%s: %s\n\nThe wounded will bleed out in: %u seconds.", _heliUnit:getName(), _message, _timeLeft)
-        //     medevac.displayMessageToSAR(_heliUnit, _txt, 5)
-        // else
+        -- if medevac.showbleedtimer == true then
+        --     _txt = string.format("%s: %s\n\nThe wounded will bleed out in: %u seconds.", _heliUnit:getName(), _message, _timeLeft)
+        --     medevac.displayMessageToSAR(_heliUnit, _txt, 5)
+        -- else
             --only show message again if its changed so we don't hide other radio messages
         if _lastMessage ~= _message then
             _txt = string.format("%s: %s", _heliUnit:getName(), _message)
             medevac.displayMessageToSAR(_heliUnit, _txt, 10)
         end
-        // end
+        -- end
         --queue up
          timer.scheduleFunction(medevac.scheduledSARFlight,
                                 {heliName = _heliUnit:getName(),
