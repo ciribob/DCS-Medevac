@@ -13,7 +13,6 @@ medevac.requestdelay = 2 -- Time in seconds before the survivors will request Me
 medevac.coordtype = 3 -- Use Lat/Long DDM (0), Lat/Long DMS (1), MGRS (2), Bullseye imperial (3) or Bullseye metric (4) for coordinates.
 medevac.bluecrewsurvivepercent = 100 -- Percentage of blue crews that will make it out of their vehicles. 100 = all will survive.
 medevac.redcrewsurvivepercent = 100 -- Percentage of red crews that will make it out of their vehicles. 100 = all will survive.
-medevac.showbleedtimer = true -- Set to true to see a timer counting down the time left for the wounded to bleed out
 medevac.sar_pilots = true -- Set to true to allow for Search & Rescue missions of downed pilots
 medevac.max_units = 6 -- Maximum number of groups in a single helicopter
 medevac.immortalcrew = false -- Set to true to make wounded crew immortal
@@ -925,16 +924,16 @@ function medevac.scheduledSARFlight(_args)
 
         local _txt
 
-        if medevac.showbleedtimer == true then
-            _txt = string.format("%s: %s\n\nThe wounded will bleed out in: %u seconds.", _heliUnit:getName(), _message, _timeLeft)
-            medevac.displayMessageToSAR(_heliUnit, _txt, 5)
-        else
+        // if medevac.showbleedtimer == true then
+        //     _txt = string.format("%s: %s\n\nThe wounded will bleed out in: %u seconds.", _heliUnit:getName(), _message, _timeLeft)
+        //     medevac.displayMessageToSAR(_heliUnit, _txt, 5)
+        // else
             --only show message again if its changed so we don't hide other radio messages
-            if _lastMessage ~= _message then
-                _txt = string.format("%s: %s", _heliUnit:getName(), _message)
-                medevac.displayMessageToSAR(_heliUnit, _txt, 10)
-            end
+        if _lastMessage ~= _message then
+            _txt = string.format("%s: %s", _heliUnit:getName(), _message)
+            medevac.displayMessageToSAR(_heliUnit, _txt, 10)
         end
+        // end
         --queue up
          timer.scheduleFunction(medevac.scheduledSARFlight,
                                 {heliName = _heliUnit:getName(),
