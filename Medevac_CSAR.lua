@@ -30,6 +30,8 @@ medevac.messageTime = 30 -- Time to show the intial wounded message for in secon
 
 medevac.movingMessage = "Be there in a jiffy!"
 medevac.loadDistance = 25 -- configure distance for troops to get in helicopter in meters.
+medevac.checkinDistance = 50 -- Distance in meters until the ground units check in again with the heli
+
 -- If you set it less than 25 the troops might not move close enough
 
 -- SETTINGS FOR MISSION DESIGNER ^^^^^^^^^^^^^^^^^^^*
@@ -750,9 +752,9 @@ function medevac.woundedShouldMoveToHeli(_woundedGroupName, _woundedGroup, _heli
         return
     end
 
-
     --on the move?
-    if medevac.woundedMoving[_woundedGroupName] == nil then
+   local _alreadyMoving = medevac.woundedMoving[_woundedGroupName] ~= nil
+   if not _alreadyMoving then
 
         local _closetGroup = medevac.getClosetGroupName(_heliUnit)
 
@@ -762,7 +764,9 @@ function medevac.woundedShouldMoveToHeli(_woundedGroupName, _woundedGroup, _heli
             medevac.orderGroupToMoveToPoint(_woundedLeader, _heliUnit:getPoint())
 
             --store point so we can send them back to the smoke
-            medevac.woundedMoving[_woundedGroupName] = { point = _woundedLeader:getPoint(), heli = _heliName }
+         medevac.woundedMoving[_woundedGroupName] = {point = _woundedLeader:getPoint(),
+                                                     heli = _heliName,
+                                                     lastCheckin = _distance}
 
         else
             --- a different group will move to you later on in the scheduled tasks that is closer
@@ -776,8 +780,21 @@ function medevac.woundedShouldMoveToHeli(_woundedGroupName, _woundedGroup, _heli
     --check they're not already moving to a different helicopter
     if medevac.woundedMoving[_woundedGroupName] ~= nil and medevac.woundedMoving[_woundedGroupName].heli == _heliName then
 
+      local _lastCheckin = medevac.woundedMoving[_woundedGroupName].lastCheckin
+
+      -- only message if the group just started moving or if it moved at least $checkinDistance meters
+      if (not _alreadyMoving) or (_lastCheckin - _distance >= medevac.checkinDistance) then
+
+         -- update last checkin
+         medevac.woundedMoving[_woundedGroupName].lastCheckin = _distance
+
         --possible issue if another heli lands nearby? they are alread heading to a differnt one
-        medevac.displayMessageToSAR(_heliUnit, string.format("%s: We are %u meters and moving to you! %s", _heliName, _distance, medevac.movingMessage), 1)
+         --possible issue if another heli lands nearby? they are alread heading to a differnt one
+         medevac.displayMessageToSAR(
+            _heliUnit,
+            string.format("%s: We are %u meters away and moving towards you! %s",
+                          _heliName, _distance, medevac.movingMessage ),5)
+      end
     else
 
         if medevac.woundedMoving[_woundedGroupName] ~= nil then
