@@ -856,7 +856,7 @@ function medevac.scheduledSARFlight(_args)
         if (_heliUnit == nil) then
 
             --Crashed on route - caught by event handler
-            medevac.inTransitGroups[_args[1]] = nil
+            medevac.inTransitGroups[_args.heliName]=nil
             --TODO display message?
 
 
