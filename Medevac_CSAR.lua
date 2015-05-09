@@ -1109,7 +1109,7 @@ function medevac.injectWoundedGroup(_groupName,_isPilot)
 
     local _spawnedGroup = Group.getByName(_groupName)
 
-    if _spawnedGroup ~= nil and _spawnedGroup:isActive() then
+    if _spawnedGroup ~= nil and _spawnedGroup:getUnit(1):isActive() then
 
         medevac.addSpecialParametersToGroup(_spawnedGroup)
 
