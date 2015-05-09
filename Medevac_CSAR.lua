@@ -11,6 +11,8 @@ medevac.bluesmokecolor = 4 -- Color of smokemarker for blue side, 0 is green, 1 
 medevac.redsmokecolor = 1 -- Color of smokemarker for red side, 0 is green, 1 is red, 2 is white, 3 is orange and 4 is blue
 medevac.requestdelay = 2 -- Time in seconds before the survivors will request Medevac
 medevac.coordtype = 3 -- Use Lat/Long DDM (0), Lat/Long DMS (1), MGRS (2), Bullseye imperial (3) or Bullseye metric (4) for coordinates.
+medevac.coordaccuracy = 1 -- Precision of the reported coordinates, see MIST-docs at http://wiki.hoggit.us/view/GetMGRSString
+                          -- only applies to _non_ bullseye coords
 medevac.bluecrewsurvivepercent = 100 -- Percentage of blue crews that will make it out of their vehicles. 100 = all will survive.
 medevac.redcrewsurvivepercent = 100 -- Percentage of red crews that will make it out of their vehicles. 100 = all will survive.
 medevac.sar_pilots = true -- Set to true to allow for Search & Rescue missions of downed pilots
@@ -752,6 +754,7 @@ function medevac.woundedShouldMoveToHeli(_woundedGroupName, _woundedGroup, _heli
         return
     end
 
+
     --on the move?
    local _alreadyMoving = medevac.woundedMoving[_woundedGroupName] ~= nil
    if not _alreadyMoving then
@@ -1143,13 +1146,13 @@ function medevac.getPositionOfWounded(_woundedGroup)
 
     local _coordinatesText = ""
     if medevac.coordtype == 0 then -- Lat/Long DMTM
-    _coordinatesText = string.format("%s", mist.getLLString({ units = _woundedTable, acc = 3, DMS = 0 }))
+      _coordinatesText = string.format("%s", mist.getLLString({units = _woundedTable, acc = medevac.coordaccuracy, DMS = 0}))
 
     elseif medevac.coordtype == 1 then -- Lat/Long DMS
-    _coordinatesText = string.format("%s", mist.getLLString({ units = _woundedTable, acc = 3, DMS = 1 }))
+      _coordinatesText = string.format("%s", mist.getLLString({units = _woundedTable, acc = medevac.coordaccuracy, DMS = 1}))
 
     elseif medevac.coordtype == 2 then -- MGRS
-    _coordinatesText = string.format("%s", mist.getMGRSString({ units = _woundedTable, acc = 3 }))
+      _coordinatesText = string.format("%s", mist.getMGRSString({units = _woundedTable, acc = medevac.coordaccuracy}))
 
     elseif medevac.coordtype == 3 then -- Bullseye Imperial
     _coordinatesText = string.format("bullseye %s", mist.getBRString({ units = _woundedTable, ref = coalition.getMainRefPoint(_woundedGroup:getCoalition()), alt = 0 }))
