@@ -375,7 +375,8 @@ function medevac.spawnGroup(_deadUnit, _isPilot)
         end
     end
 
-    return coalition.addGroup(_side, Group.Category.GROUND, _group)
+	-- takes a COUNTRY enum not COALITION
+    return coalition.addGroup(_deadUnit:getCountry(), Group.Category.GROUND, _group)
 end
 
 
