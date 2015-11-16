@@ -3,6 +3,8 @@
 
 medevac = {}
 
+medevac.openBeta15 = true -- set to false if you're on 1.2
+
 -- SETTINGS FOR MISSION DESIGNER vvvvvvvvvvvvvvvvvv
 medevac.medevacunits = { "MEDEVAC #1", "MEDEVAC #2", "MEDEVAC #3", "MEDEVAC #4", "MEDEVAC #5", "MEDEVAC RED #1" } -- List of all the MEDEVAC _UNIT NAMES_ (the line where it says "Pilot" in the ME)!
 medevac.bluemash = { "BlueMASH #1", "BlueMASH #2" } -- The unit that serves as MASH for the blue side
@@ -41,7 +43,11 @@ medevac.alwaysRadioBeaconForPilot = false -- if set to true, there will always b
 medevac.useTrueWeights = false -- true weight calculates the number of troops you can transport based on your current loadout
 medevac.maximumUnits = 7 -- If true weights is set to false, the heli can transport this many units
 
--- SETTINGS FOR MISSION DESIGNER ^^^^^^^^^^^^^^^^^^^*
+-- SETTINGS FOR MISSION DESIGNER ^^^^^^^^^^^^^^^^^^^
+
+-- Changelog v 6.2
+-- Added Open Beta switch to make the script compatible with 1.5
+-- Added hover pickup for single units
 
 -- Changelog v 6.1
 -- Made the True Weights calculation optional
@@ -125,6 +131,9 @@ medevac.frequencyOffset = 0 -- offset for radio frequency. Is incremented  with 
 medevac.radioBeacons = {} -- all current beacons
 
 medevac.max_units = {} -- maximum units for each helicopter
+
+medevac.hoverStatus = {} -- stores hover status
+
 -- Utility
 
 function tablelength(T)
@@ -246,7 +255,7 @@ function medevac.eventHandler:onEvent(_event)
                 medevac.addSpecialParametersToGroup(_spawnedGroup)
 
                 --store the old group under the new group name
-                medevac.woundedGroups[_spawnedGroup:getName()] = { originalGroup = _unit:getGroup():getName(), side = _spawnedGroup:getCoalition() }
+                medevac.woundedGroups[_spawnedGroup:getName()] = { originalGroup = medevac.getGroupName(_unit), side = _spawnedGroup:getCoalition() }
 
                 if _isPilot then
                     trigger.action.outTextForCoalition(_unit:getCoalition(), "MAYDAY MAYDAY! " .. _unit:getTypeName() .. " shot down. Chute Spotted!", 10)
@@ -453,7 +462,7 @@ function medevac.initSARForGroup(_downedGroup, _pilot)
 
         local _freq = medevac.generateADFFrequency()
 
-         medevac.addBeaconToGroup(_downedGroup:getName(),_freq)
+        medevac.addBeaconToGroup(_downedGroup:getName(),_freq)
 
         if (_pilot) then
             _text = string.format("%s requests SAR at %s, beacon at  %.2f KHz",
@@ -604,6 +613,8 @@ function medevac.checkCloseWoundedGroup(_distance, _heliUnit, _heliName, _wounde
 
     local _woundedCount = #_woundedGroup
 
+    local _reset = true
+
     medevac.popSmokeForGroup(_woundedGroupName, _woundedLeader)
 
     if medevac.heliVisibleMessage[_lookupKeyHeli] == nil then
@@ -624,7 +635,7 @@ function medevac.checkCloseWoundedGroup(_distance, _heliUnit, _heliName, _wounde
             if _woundedCount > 1 then
                 medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s. You're close now! Land within 500m of the smoke and we'll move to you.", _heliName, _woundedGroupName), 10)
             else
-                medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s. You're close now! Land within 500m of the smoke and I'll move to you.", _heliName, _woundedLeader:getName()), 10)
+                medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s. You're close now! Land within 500m of the smoke and I'll move to you or hover!", _heliName, _woundedLeader:getName()), 10)
             end
 
             --mark as shown for THIS heli and THIS group
@@ -638,61 +649,7 @@ function medevac.checkCloseWoundedGroup(_distance, _heliUnit, _heliName, _wounde
 
             -- if you land on them, doesnt matter if they were heading to someone else as you're closer, you win! :)
             if (_distance < medevac.loadDistance) then
-                -- GET IN!
-                local _heliName = _heliUnit:getName()
-                local _groups = medevac.inTransitGroups[_heliName]
-                local _unitsInHelicopter = medevac.unitsInHelicopterCount(_heliName)
-
-                -- init table if there is none for this helicopter
-                if not _groups then
-                    medevac.inTransitGroups[_heliName] = {}
-                    _groups = medevac.inTransitGroups[_heliName]
-                end
-
-                -- if the heli can't pick them up, show a message and return
-                if _unitsInHelicopter + _woundedCount > medevac.max_units[_heliName] then
-                    medevac.displayMessageToSAR(_heliUnit, string.format("%s, %s. We're already crammed with %d guys! No chance to get the %d of you in, sorry!",
-                        _woundedGroupName, _heliName, _unitsInHelicopter, _woundedCount), 10)
-                    return true
-                end
-
-                --remove from wounded groups to stop message about death
-                medevac.woundedMoving[_woundedGroupName] = nil
-
-                local _bleedTime = medevac.getBleedTime(_heliUnit)
-
-                medevac.inTransitGroups[_heliName][_woundedGroupName] =
-                {
-                    originalGroup = medevac.woundedGroups[_woundedGroupName].originalGroup,
-                    woundedGroup = _woundedGroupName,
-                    woundedCount = _woundedCount, -- used in unitsInHelicopterCount()
-                    side = _heliUnit:getCoalition(),
-                    bleedOutTime = _bleedTime + timer.getTime()
-                }
-
-                Group.destroy(_woundedLeader:getGroup())
-
-                --NO MASH
-                if _bleedTime == -1 then
-                    medevac.displayMessageToSAR(_heliUnit, string.format("%s: NO MASH! The casulties died of despair!", _heliName), 10)
-                    return false
-                end
-
-                -- will have bled out after  timer.getTime() >_bleedTime + timer.getTime()
-                if _woundedCount > 1 then
-                    medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s. We're in! Get to the MASH ASAP! You've got %s seconds tops!", _heliName, _woundedGroupName, _bleedTime), 10)
-                else
-                    medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s I'm in! Get to the MASH ASAP! You've got %s seconds tops!", _heliName, _woundedLeader:getName(), _bleedTime), 10)
-                end
-
-                timer.scheduleFunction(medevac.scheduledSARFlight,
-                    {
-                        heliName = _heliUnit:getName(),
-                        bleedTime = _bleedTime + timer.getTime(),
-                        groupName = _woundedGroupName
-                    },
-                    timer.getTime() + 5)
-                return false
+                medevac.pickupWoundedGroup(_heliUnit,_woundedGroup,_woundedGroupName,_woundedCount)
             end
 
         else
@@ -705,9 +662,128 @@ function medevac.checkCloseWoundedGroup(_distance, _heliUnit, _heliName, _wounde
 
                 medevac.woundedMoving[_woundedGroupName] = nil
             end
+
+            local _unitsInHelicopter = medevac.unitsInHelicopterCount(_heliName)
+
+            -- check if we're hoving above if its 1 unit
+            if  medevac.inAir(_heliUnit) then
+
+
+                if _distance < 8.0  then
+
+                    if _woundedCount > 1 then
+                        medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s. Sorry too many guys to winch up!", _heliName, _woundedGroupName), 5,true)
+                    else
+                        --check height!
+                        local _height = _heliUnit:getPoint().y - _woundedLeader:getPoint().y
+
+                        if _height  <= 20.0 then
+
+                            local _time = medevac.hoverStatus[_lookupKeyHeli]
+
+                            if _time == nil then
+                                medevac.hoverStatus[_lookupKeyHeli] = 10
+                                _time = 10
+                            else
+                                _time = medevac.hoverStatus[_lookupKeyHeli] - 1
+                                medevac.hoverStatus[_lookupKeyHeli] = _time
+                            end
+
+                            if _time > 0 then
+                                medevac.displayMessageToSAR(_heliUnit, "Hovering above " .. _woundedGroupName .. ". \n\nHold hover for " .. _time .. " seconds to winch them up. \n\nIf the countdown stops you're too far away!", 10,true)
+                            else
+                                medevac.hoverStatus[_lookupKeyHeli] = nil
+                                return medevac.pickupWoundedGroup(_heliUnit,_woundedGroup,_woundedGroupName,_woundedCount)
+                            end
+                            _reset = false
+                        else
+                            medevac.displayMessageToSAR(_heliUnit, "Too high to winch " .. _woundedGroupName .. " \nReduce height and hover for 10 seconds!", 5,true)
+                        end
+                    end
+                end
+
+            end
         end
     end
 
+    if _reset then
+        medevac.hoverStatus[_lookupKeyHeli] = nil
+    end
+
+    return true
+end
+
+function medevac.pickupWoundedGroup(_heliUnit,_woundedGroup,_woundedGroupName,_woundedCount)
+
+    -- GET IN!
+    local _heliName = _heliUnit:getName()
+    local _groups = medevac.inTransitGroups[_heliName]
+    local _unitsInHelicopter = medevac.unitsInHelicopterCount(_heliName)
+    local _woundedLeader = _woundedGroup[1]
+
+    -- init table if there is none for this helicopter
+    if not _groups then
+        medevac.inTransitGroups[_heliName] = {}
+        _groups = medevac.inTransitGroups[_heliName]
+    end
+
+    -- if the heli can't pick them up, show a message and return
+    if _unitsInHelicopter + _woundedCount > medevac.max_units[_heliName] then
+        medevac.displayMessageToSAR(_heliUnit, string.format("%s, %s. We're already crammed with %d guys! No chance to get the %d of you in, sorry!",
+            _woundedGroupName, _heliName, _unitsInHelicopter, _woundedCount), 10)
+        return true
+    end
+
+    --remove from wounded groups to stop message about death
+    medevac.woundedMoving[_woundedGroupName] = nil
+
+    local _bleedTime = medevac.getBleedTime(_heliUnit)
+
+    medevac.inTransitGroups[_heliName][_woundedGroupName] =
+    {
+        originalGroup = medevac.woundedGroups[_woundedGroupName].originalGroup,
+        woundedGroup = _woundedGroupName,
+        woundedCount = _woundedCount, -- used in unitsInHelicopterCount()
+        side = _heliUnit:getCoalition(),
+        bleedOutTime = _bleedTime + timer.getTime()
+    }
+
+    Group.destroy(_woundedLeader:getGroup())
+
+    --NO MASH
+    if _bleedTime == -1 then
+        medevac.displayMessageToSAR(_heliUnit, string.format("%s: NO MASH! The casulties died of despair!", _heliName), 10)
+        return false
+    end
+
+    -- will have bled out after  timer.getTime() >_bleedTime + timer.getTime()
+    if _woundedCount > 1 then
+        medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s. We're in! Get to the MASH ASAP! You've got %s seconds tops!", _heliName, _woundedGroupName, _bleedTime), 10)
+    else
+        medevac.displayMessageToSAR(_heliUnit, string.format("%s: %s I'm in! Get to the MASH ASAP! You've got %s seconds tops!", _heliName, _woundedLeader:getName(), _bleedTime), 10)
+    end
+
+    timer.scheduleFunction(medevac.scheduledSARFlight,
+        {
+            heliName = _heliUnit:getName(),
+            bleedTime = _bleedTime + timer.getTime(),
+            groupName = _woundedGroupName
+        },
+        timer.getTime() + 5)
+    return false
+end
+
+function medevac.inAir(_heli)
+
+    if _heli:inAir() == false then
+        return false
+    end
+
+    -- less than 5 cm/s a second so landed
+    -- BUT AI can hold a perfect hover so ignore AI
+    if mist.vec.mag(_heli:getVelocity()) < 0.05 and _heli:getPlayerName() ~= nil then
+        return false
+    end
     return true
 end
 
@@ -809,33 +885,33 @@ function medevac.woundedShouldMoveToHeli(_woundedGroupName, _woundedGroup, _heli
 
     --Allow them to move to it even if its full!
     -- dont move to this heli if its full!
---    if medevac.inTransitGroups[_heliUnit:getName()] ~= nil then
---
---        local _woundedCount = #_woundedGroup
---        local _groups = medevac.inTransitGroups[_heliName]
---        local _unitsInHelicopter = medevac.unitsInHelicopterCount(_heliName)
---
---        -- init table if there is none for this helicopter
---        if not _groups then
---            medevac.inTransitGroups[_heliName] = {}
---            _groups = medevac.inTransitGroups[_heliName]
---        end
---
---        -- if the heli can't pick them up, stop moving to it?
---        if _unitsInHelicopter + _woundedCount > medevac.max_units[_heliName] then
---
---            --move back if already moving to this one
---            if medevac.woundedMoving[_woundedGroupName] ~= nil and medevac.woundedMoving[_woundedGroupName].heli == _heliName then
---
---                medevac.orderGroupToMoveToPoint(_woundedLeader, medevac.woundedMoving[_woundedGroupName].point)
---
---                medevac.woundedMoving[_woundedGroupName] = nil
---            end
---
---            return
---        end
---
---    end
+    --    if medevac.inTransitGroups[_heliUnit:getName()] ~= nil then
+    --
+    --        local _woundedCount = #_woundedGroup
+    --        local _groups = medevac.inTransitGroups[_heliName]
+    --        local _unitsInHelicopter = medevac.unitsInHelicopterCount(_heliName)
+    --
+    --        -- init table if there is none for this helicopter
+    --        if not _groups then
+    --            medevac.inTransitGroups[_heliName] = {}
+    --            _groups = medevac.inTransitGroups[_heliName]
+    --        end
+    --
+    --        -- if the heli can't pick them up, stop moving to it?
+    --        if _unitsInHelicopter + _woundedCount > medevac.max_units[_heliName] then
+    --
+    --            --move back if already moving to this one
+    --            if medevac.woundedMoving[_woundedGroupName] ~= nil and medevac.woundedMoving[_woundedGroupName].heli == _heliName then
+    --
+    --                medevac.orderGroupToMoveToPoint(_woundedLeader, medevac.woundedMoving[_woundedGroupName].point)
+    --
+    --                medevac.woundedMoving[_woundedGroupName] = nil
+    --            end
+    --
+    --            return
+    --        end
+    --
+    --    end
 
 
     --on the move?
@@ -880,7 +956,7 @@ function medevac.woundedShouldMoveToHeli(_woundedGroupName, _woundedGroup, _heli
             --possible issue if another heli lands nearby? they are alread heading to a differnt one
             medevac.displayMessageToSAR(_heliUnit,
                 string.format("%s: We are %u meters away and moving towards you! %s",
-                    _heliName, _distance, medevac.movingMessage), 5)
+                    _heliName, _distance, medevac.movingMessage), 5,true)
         end
     else
 
@@ -1160,9 +1236,16 @@ function medevac.delayedHelpMessage(_args)
 end
 
 
-function medevac.displayMessageToSAR(_unit, _text, _time)
+function medevac.displayMessageToSAR(_unit, _text, _time,_clear)
 
-    trigger.action.outTextForGroup(_unit:getGroup():getID(), _text, _time)
+    local _groupId = medevac.getGroupId(_unit)
+    if _groupId then
+        if _clear == true then
+            trigger.action.outTextForGroup(_groupId, _text, _time,_clear)
+        else
+            trigger.action.outTextForGroup(_groupId, _text, _time)
+        end
+    end
 end
 
 function medevac.getWoundedGroup(_groupName)
@@ -1673,7 +1756,13 @@ medevac.addBeaconToGroup = function(_woundedGroupName, _freq)
         return
     end
 
-    trigger.action.radioTransmission(medevac.radioSoundFile, _group:getUnit(1):getPoint(), 0, false, _freq, 1000)
+    local _sound = medevac.radioSoundFile
+
+    if medevac.openBeta15 then
+        _sound = "l10n/DEFAULT/"..medevac.radioSoundFile
+    end
+
+    trigger.action.radioTransmission(_sound, _group:getUnit(1):getPoint(), 0, false, _freq, 1000)
 
     timer.scheduleFunction(medevac.refreshRadioBeacon, { _woundedGroupName, _freq }, timer.getTime() + 30)
 end
@@ -1684,6 +1773,26 @@ medevac.refreshRadioBeacon = function(_args)
 end
 
 -------- END RADIO
+
+function medevac.getGroupId(_unit)
+
+    local _unitDB =  mist.DBs.unitsById[tonumber(_unit:getID())]
+    if _unitDB ~= nil and _unitDB.groupId then
+        return _unitDB.groupId
+    end
+
+    return nil
+end
+
+function medevac.getGroupName(_unit)
+
+    local _unitDB =  mist.DBs.unitsById[tonumber(_unit:getID())]
+    if _unitDB ~= nil and _unitDB.groupName then
+        return _unitDB.groupName
+    end
+
+    return nil
+end
 
 -- Adds menuitem to all medevac units that are active
 function addMedevacMenuItem()
@@ -1699,21 +1808,22 @@ function addMedevacMenuItem()
 
             if medevac.addedTo[_unitName] == nil then
 
-                local _rootPath = missionCommands.addSubMenuForGroup(_unit:getGroup():getID(), "MEDEVAC")
+                local _groupId = medevac.getGroupId(_unit)
+                local _rootPath = missionCommands.addSubMenuForGroup(_groupId, "MEDEVAC")
 
-                missionCommands.addCommandForGroup(_unit:getGroup():getID(),
+                missionCommands.addCommandForGroup(_groupId,
                     "Active MEDEVAC/SAR",
                     _rootPath,
                     medevac.displayActiveSAR,
                     _unitName)
 
-                missionCommands.addCommandForGroup(_unit:getGroup():getID(),
+                missionCommands.addCommandForGroup(_groupId,
                     "Onboard Wounded Status",
                     _rootPath,
                     medevac.displayOnboardStatus,
                     _unitName)
 
-                missionCommands.addCommandForGroup(_unit:getGroup():getID(),
+                missionCommands.addCommandForGroup(_groupId,
                     "Request Signal Flare",
                     _rootPath,
                     medevac.signalFlare,
@@ -1721,7 +1831,7 @@ function addMedevacMenuItem()
 
                 -- only enabled if true weights are used
                 if medevac.useTrueWeights then
-                    missionCommands.addCommandForGroup(_unit:getGroup():getID(),
+                    missionCommands.addCommandForGroup(_groupId,
                         "Save loadout for MEDEVAC/SAR",
                         _rootPath,
                         medevac.saveLoadout,
